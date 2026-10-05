@@ -1,0 +1,17 @@
+# Виртуальное окружение
+venv/
+.venv/
+env/
+
+# Кэш Python
+__pycache__/
+*.pyc
+
+# База данных SQLite (чтобы локальная БД не летела в репозиторий)
+*.db
+*.sqlite3
+database.py
+
+# Настройки IDE
+.vscode/
+.idea/
