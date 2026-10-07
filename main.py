@@ -1,4 +1,4 @@
-from fastapi import FastAPI, status, HTTPException, Query, Path
+from fastapi import FastAPI, status, HTTPException, Query, Path, Depends
 
 from models.Task import TaskCreate, TaskPatch, TaskResponse
 
@@ -10,10 +10,50 @@ fake_tasks_db = [
     {"id": 3, "title": "Освоить Pydantic и POST-запросы", "completed": False}
 ]
 
+def get_app_name():
+    return "Task manager API"
 
-@app.get("/")
-def read_root():
-    return {"message": "Task Manager API"}
+def get_task_or_404(task_id: int = Path(gt=0, description="Enter task id")):
+    task = next((t for t in fake_tasks_db if t["id"] == task_id), None)
+    if task is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Task with id {task_id} not found"
+        )
+    return task
+
+def get_user():
+    return {"id": 1, "username": "Yury"}
+
+def get_current_user(user = Depends(get_user)):
+    return user
+
+def get_db_session():
+    print("1. Session with DB is opened")
+
+    try:
+        yield "fake_db_session"
+    finally:
+        print("3. Session with DB is closed")
+    
+
+
+@app.get("/db-test", status_code=status.HTTP_204_NO_CONTENT)
+def get_db_test(session = Depends(get_db_session)):
+    print(f"2. Now session with DB is running {session}")
+    return None
+
+
+@app.get("/me")
+def get_me(user = Depends(get_current_user)):
+    return user
+
+
+@app.get("/info")
+def get_info(
+    app_name = Depends(get_app_name)
+):
+    return {"app_name": app_name}
 
 
 @app.get("/tasks", response_model=list[TaskResponse])
@@ -39,15 +79,8 @@ def get_all_tasks(
 
 @app.get("/tasks/{task_id}", response_model=TaskResponse)
 def get_task_by_id(
-    task_id: int = Path(gt=0, description="Enter task id")
+    task: dict = Depends(get_task_or_404)
 ):
-    task = next((task for task in fake_tasks_db if task["id"] == task_id), None)
-
-    if task is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Task with id {task_id} not found"
-        )
     return task
     
 
@@ -67,17 +100,8 @@ def create_task(task: TaskCreate):
 @app.patch("/tasks/{task_id}", response_model=TaskResponse)
 def patch_task(
     task_update: TaskPatch,
-    task_id: int = Path(gt=0, description="Enter id of task you want to update")
-):
-    task = next(
-        (t for t in fake_tasks_db if t["id"] == task_id), None
-    )
-    if task is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Task with id {task_id} not found"
-        )
-    
+    task: dict = Depends(get_task_or_404)
+):  
     update = task_update.model_dump(exclude_unset=True)
     task.update(update)
     return task
@@ -86,30 +110,15 @@ def patch_task(
 @app.put("/tasks/{task_id}", response_model=TaskResponse)
 def update_task(
     task_update: TaskCreate,
-    task_id: int = Path(gt=0, description="Enter id of task you want to change")
+    task: dict = Depends(get_task_or_404)
 ):
-    task = next((t for t in fake_tasks_db if t["id"] == task_id), None)
-    if task is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Task with id {task_id} not found"
-        )
-    
     task.update(task_update.model_dump())
-    task["id"] = task_id
     return task
 
 
 @app.delete("/tasks/{task_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_task(
-    task_id: int = Path(gt=0, description="Enter id of task you want to delete")
+    task: dict = Depends(get_task_or_404)
 ):
-    task = next((t for t in fake_tasks_db if t["id"] == task_id), None)
-    if task is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Task with id {task_id} not Found"
-        )
-    
     fake_tasks_db.remove(task)
     return None
