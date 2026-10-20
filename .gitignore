@@ -10,7 +10,6 @@ __pycache__/
 # База данных SQLite (чтобы локальная БД не летела в репозиторий)
 *.db
 *.sqlite3
-database.py
 
 # Настройки IDE
 .vscode/
