@@ -15,5 +15,3 @@ database.py
 # Настройки IDE
 .vscode/
 .idea/
-
-database.py

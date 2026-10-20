@@ -1,20 +1,30 @@
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, status, HTTPException, Query, Path, Depends
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy import select, or_
+from sqlalchemy.orm import selectinload, joinedload
 
+from database import init_db, get_session, Task, User
 from models.Task import TaskCreate, TaskPatch, TaskResponse
+from models.User import UserWithTasks, UserCreate
 
-app = FastAPI()
 
-fake_tasks_db = [
-    {"id": 1, "title": "Изучить основы FastAPI", "completed": True},
-    {"id": 2, "title": "Написать получение задачи по ID", "completed": True},
-    {"id": 3, "title": "Освоить Pydantic и POST-запросы", "completed": False}
-]
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await init_db()
+    yield
 
-def get_app_name():
-    return "Task manager API"
+app = FastAPI(title="Task manager API", lifespan=lifespan)
 
-def get_task_or_404(task_id: int = Path(gt=0, description="Enter task id")):
-    task = next((t for t in fake_tasks_db if t["id"] == task_id), None)
+
+async def get_task_or_404(
+    task_id: int = Path(gt=0, description="Enter task id"),
+    session: AsyncSession = Depends(get_session)
+) -> Task:
+    stmt = select(Task).where(Task.id == task_id)
+    task = await session.scalar(stmt)
+
     if task is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -22,103 +32,108 @@ def get_task_or_404(task_id: int = Path(gt=0, description="Enter task id")):
         )
     return task
 
-def get_user():
-    return {"id": 1, "username": "Yury"}
-
-def get_current_user(user = Depends(get_user)):
-    return user
-
-def get_db_session():
-    print("1. Session with DB is opened")
-
-    try:
-        yield "fake_db_session"
-    finally:
-        print("3. Session with DB is closed")
-    
-
-
-@app.get("/db-test", status_code=status.HTTP_204_NO_CONTENT)
-def get_db_test(session = Depends(get_db_session)):
-    print(f"2. Now session with DB is running {session}")
-    return None
-
-
-@app.get("/me")
-def get_me(user = Depends(get_current_user)):
-    return user
-
-
-@app.get("/info")
-def get_info(
-    app_name = Depends(get_app_name)
+async def get_user_or_404(
+    user_id: int,
+    session:AsyncSession = Depends(get_session)
 ):
-    return {"app_name": app_name}
+    user = await session.scalar(select(User).where(User.id == user_id))
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"User with id {user_id} not found"
+        )
+    return user
+
+async def commit_or_rollback(session: AsyncSession) -> None:
+    try:
+        await session.commit()
+    except:
+        await session.rollback()
+        raise
+
+
+@app.get("/users/{user_id}", response_model=UserWithTasks)
+async def get_user_with_tasks(
+    session: AsyncSession = Depends(get_session),
+    user_id: int = Path(gt=0, description="Enter user ID")
+):
+    stmt = select(User).options(selectinload(User.tasks)).where(User.id == user_id)
+    user = await session.scalar(stmt)
+
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"User with id {user_id} not found"
+        )
+    return user
 
 
 @app.get("/tasks", response_model=list[TaskResponse])
-def get_all_tasks(
+async def get_all_tasks(
     completed: bool | None = None,
     name: str | None = Query(
         default=None,
-        description="Search task by name"
-    )
+        description="Search task by name or description"
+    ),
+    session: AsyncSession = Depends(get_session)
 ):
-    result = fake_tasks_db
+    stmt = select(Task)
     
     if completed is not None:
-        result = [task for task in result if task.get("completed") == completed]
+        stmt = stmt.where(Task.is_completed == completed)
     
     if name is not None:
-        result = [
-            task for task in result if name.lower() in task.get("title", "").lower()
-        ]
-        
-    return result
+        pattern = f"%{name}%"
+        stmt = stmt.where(
+            or_(
+                Task.title.ilike(pattern),
+                Task.description.ilike(pattern)
+            )
+        )
+
+    return (await session.scalars(stmt)).all()
 
 
 @app.get("/tasks/{task_id}", response_model=TaskResponse)
-def get_task_by_id(
-    task: dict = Depends(get_task_or_404)
+async def get_task_by_id(
+    task: Task = Depends(get_task_or_404),
 ):
     return task
     
 
 @app.post("/tasks", response_model=TaskResponse, status_code=status.HTTP_201_CREATED)
-def create_task(task: TaskCreate):
-    new_id = max((t["id"] for t in fake_tasks_db), default=0) + 1
+async def create_task(
+    task_in: TaskCreate,
+    session: AsyncSession = Depends(get_session)
+):
+    user = await get_user_or_404(task_in.user_id, session)
+    new_task = Task(**task_in.model_dump())
+    session.add(new_task)
 
-    new_task = {
-        "id": new_id,
-        **task.model_dump()
-    }
-
-    fake_tasks_db.append(new_task)
+    await commit_or_rollback(session)
     return new_task
 
 
 @app.patch("/tasks/{task_id}", response_model=TaskResponse)
-def patch_task(
+async def patch_task(
     task_update: TaskPatch,
-    task: dict = Depends(get_task_or_404)
+    task: Task = Depends(get_task_or_404),
+    session: AsyncSession = Depends(get_session)
 ):  
-    update = task_update.model_dump(exclude_unset=True)
-    task.update(update)
-    return task
+    update_data = task_update.model_dump(exclude_unset=True)
 
+    for key, value in update_data.items():
+        setattr(task, key, value)
 
-@app.put("/tasks/{task_id}", response_model=TaskResponse)
-def update_task(
-    task_update: TaskCreate,
-    task: dict = Depends(get_task_or_404)
-):
-    task.update(task_update.model_dump())
+    await commit_or_rollback(session)
     return task
 
 
 @app.delete("/tasks/{task_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_task(
-    task: dict = Depends(get_task_or_404)
+async def delete_task(
+    task: Task = Depends(get_task_or_404),
+    session: AsyncSession = Depends(get_session)
 ):
-    fake_tasks_db.remove(task)
+    await session.delete(task)
+    await commit_or_rollback(session)
     return None
