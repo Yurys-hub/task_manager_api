@@ -1,5 +1,6 @@
 import os
 from typing import AsyncGenerator, List, Optional
+from config import settings
 
 from sqlalchemy import Boolean, ForeignKey, String
 from sqlalchemy.ext.asyncio import (
@@ -11,11 +12,9 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 os.makedirs("data", exist_ok=True)
 
-DATABASE_URL = "sqlite+aiosqlite:///./data/tasks.db"
-
 engine = create_async_engine(
-    DATABASE_URL,
-    echo=True 
+    settings.database_url,
+    echo=settings.sql_echo
 )
 
 # async sessions factory
@@ -49,7 +48,7 @@ class Task(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
 
     title: Mapped[str] = mapped_column(String(100), nullable=False)
-    description: Mapped[Optional[str]] = mapped_column(String(255), default=None)
+    description: Mapped[Optional[str]] = mapped_column(String(1000), default=None)
     priority: Mapped[int] = mapped_column(default=1)
     is_completed: Mapped[bool] = mapped_column(Boolean, default=False)
 

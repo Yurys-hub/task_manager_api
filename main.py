@@ -6,8 +6,8 @@ from sqlalchemy import select, or_
 from sqlalchemy.orm import selectinload, joinedload
 
 from database import init_db, get_session, Task, User
-from models.Task import TaskCreate, TaskPatch, TaskResponse
-from models.User import UserWithTasks, UserCreate
+from models.User_Task import TaskCreate, TaskPatch, TaskResponse, TaskWithUser
+from models.User_Task import UserWithTasks, UserCreate, UserResponse
 
 
 @asynccontextmanager
@@ -22,7 +22,7 @@ async def get_task_or_404(
     task_id: int = Path(gt=0, description="Enter task id"),
     session: AsyncSession = Depends(get_session)
 ) -> Task:
-    stmt = select(Task).where(Task.id == task_id)
+    stmt = select(Task).options(joinedload(Task.user)).where(Task.id == task_id)
     task = await session.scalar(stmt)
 
     if task is None:
@@ -47,9 +47,42 @@ async def get_user_or_404(
 async def commit_or_rollback(session: AsyncSession) -> None:
     try:
         await session.commit()
-    except:
+    except IntegrityError as exc:
+        await session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"A user with this username alreadt exists"
+        ) from exc
+    except Exception:
         await session.rollback()
         raise
+
+
+@app.post("/users", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
+async def create_user(
+    user_in: UserCreate,
+    session: AsyncSession = Depends(get_session)
+):
+    user_data = user_in.model_dump()
+    user_name = user_data["username"]
+    response = await session.scalar(select(User).where(User.username == user_name))
+
+    if response is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"User {user_name} already exists"
+        )
+
+    user = User(**user_data)
+    session.add(user)
+
+    await commit_or_rollback(session)
+    return user
+
+
+@app.get("/users", response_model=list[UserResponse])
+async def get_all_users(session: AsyncSession = Depends(get_session)):
+    return (await session.scalars(select(User))).all()
 
 
 @app.get("/users/{user_id}", response_model=UserWithTasks)
@@ -68,7 +101,17 @@ async def get_user_with_tasks(
     return user
 
 
-@app.get("/tasks", response_model=list[TaskResponse])
+@app.delete("/users/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_user_by_id(
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(get_user_or_404)
+) -> None:
+    await session.delete(user)
+    await commit_or_rollback(session)
+    return None
+
+
+@app.get("/tasks", response_model=list[TaskWithUser])
 async def get_all_tasks(
     completed: bool | None = None,
     name: str | None = Query(
@@ -77,7 +120,7 @@ async def get_all_tasks(
     ),
     session: AsyncSession = Depends(get_session)
 ):
-    stmt = select(Task)
+    stmt = select(Task).options(joinedload(Task.user))
     
     if completed is not None:
         stmt = stmt.where(Task.is_completed == completed)

@@ -1,6 +1,6 @@
 import pytest
 
-from models.Task import TaskResponse
+from models.User_Task import TaskResponse
 
 
 @pytest.fixture
@@ -27,7 +27,49 @@ async def test_task(async_client):
 
 
 @pytest.mark.anyio
-async def test_post_and_delete(async_client):
+async def test_user_create_and_delete(async_client):
+    response = await async_client.post(
+        "/users/",
+        json={
+            "username": "1-st player"
+        }
+    )
+    response_data = response.json()
+    user_id = response_data["id"]
+    
+    assert response.status_code == 201
+    assert response_data["username"] == "1-st player"
+
+    response = await async_client.delete(f"/users/{user_id}")
+    assert response.status_code == 204
+
+    response = await async_client.get(f"/users/{user_id}")
+    assert response.status_code == 404
+
+
+@pytest.mark.parametrize(
+    "create_data, status_code",
+    [
+        ({"username": "*" * 50}, 201),
+        ({"username": "*" * 51}, 422)
+    ]
+)
+@pytest.mark.anyio
+async def test_create_user_length_validation(async_client, create_data, status_code):
+    response = await async_client.post(
+        "/users/",
+        json=create_data
+    )
+    assert response.status_code == status_code
+
+    if response.status_code == 201:
+        user_id = response.json()["id"]
+        delete_response = await async_client.delete(f"/users/{user_id}")
+        assert delete_response.status_code == 204
+
+
+@pytest.mark.anyio
+async def test_task_post_and_delete(async_client):
     create_response = await async_client.post(
         "/tasks",
         json={
@@ -126,6 +168,7 @@ async def test_create_task_validation_errors(async_client, payload, expected_sta
     [
         {"title": "New title"},
         {"description": "New description"},
+        {"description": None},
         {"priority": 3},
         {"user_id": 2},
         {"is_completed": True}
@@ -145,6 +188,38 @@ async def test_patch_task(
 
     for key, value in patch_data.items():
         assert response_data[key] == value
+
+
+@pytest.mark.parametrize(
+    "patch_data",
+    [
+        {"title": None},
+        {"title": ""},
+        {"title": "  "},
+        {"priority": 0},
+        {"priority": 6},
+        {"priority": None},
+        {"is_completed": None},
+        {"user_id": None},
+        {"user_id": 0}
+    ]
+)
+@pytest.mark.anyio
+async def test_patch_task_invalid_data(async_client, patch_data, test_task):
+    task_id = test_task["id"]
+    
+    response = await async_client.patch(
+        f"/tasks/{task_id}",
+        json=patch_data
+    )
+
+    assert response.status_code == 422
+
+    get_response = await async_client.get(f"/tasks/{task_id}")
+    response_data = get_response.json()
+
+    for key in patch_data:
+        assert response_data[key] == test_task[key]
 
 
 @pytest.mark.anyio
