@@ -29,11 +29,15 @@ async def test_task(async_client):
 @pytest.mark.anyio
 async def test_user_create_and_delete(async_client):
     response = await async_client.post(
-        "/users/",
+        "/users",
         json={
             "username": "1-st player"
         }
     )
+
+    print("Status:", response.status_code)
+    print("Body:", repr(response.text))
+
     response_data = response.json()
     user_id = response_data["id"]
     
@@ -57,7 +61,7 @@ async def test_user_create_and_delete(async_client):
 @pytest.mark.anyio
 async def test_create_user_length_validation(async_client, create_data, status_code):
     response = await async_client.post(
-        "/users/",
+        "/users",
         json=create_data
     )
     assert response.status_code == status_code
